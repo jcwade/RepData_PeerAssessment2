@@ -1,0 +1,86 @@
+---
+title: "Sources of storm-relatated casualties and property damage"
+author: "jcwade"
+date: "April 25, 2015"
+output: html_document
+---
+
+## Synopsis
+        
+Using storm data collected by U.S. National Oceanic and Atmospheric Administration's (NOAA), we analyze storm types such as hail, thunderstorm wind, and tornados in terms of their effect on casualties (fatalities and injuries) and property damage in U.S. dolars.  
+
+## Data Processing
+
+We first import the following R libraries:
+```{r, message=FALSE, warnings=FALSE}
+library(dplyr)
+library(stringr)
+```
+
+The Storm Data was downloaded to a file and then loaded with the following code:
+```{r, cache=TRUE}
+storm_data_file <- "StormData.csv.bz2"
+#FIXME: d <- tbl_df(read.csv(bzfile(storm_data_file), stringsAsFactors = FALSE))
+```
+There are `r nrows(d)` and `r ncols(d)`.
+
+For our analysis, we will use the `EVTYPE` column to indicate the event type.  We will not try to aggregate types together, such as grouping "THUNDERSTORM WIND" with "HIGH WIND", since we do not have sufficient domain expertise.
+
+To measure casualties, we sum `FATALITIES` and `INJURIES`:
+```{r}
+d$CASUALTIES <- d$FATALITIES + d$INJURIES
+```
+
+For total property damage, we sum `PROPDMG` and `CROPDMG`.  However, in the data, these values are not raw dollar amounts but a coefficient and a unit.  For example, the first row has the following values:
+```{r}
+d[1, ] %>% select(contains("DMG"))
+```
+Exponent values such as "K", "M", and "B" are given in the source as thousands, millions, and billions, respectively.  However, there are also other values in the data, including empty values.  We observe the following unique values:
+```{r}
+unique_dmgexp <- c(d$PROPDMGEXP, d$CROPDMGEXP) %>% unique %>% sort
+```
+We use the following scheme to convert the other values:
+* "k", "m", "b": same as uppercase equivalents;
+* digits: associated power of ten;
+* others: units of thousands.
+
+The following R code performs this conversion:
+```{r}
+convert_dmgexp <- function(e) {
+        KMB <- c(K = 1e3, M = 1e6, B = 1e9)
+        e <- toupper(e)
+        if (e %in% names(KMB)) {
+                KMB[[e]]
+        } else if (str_detect(e, "[0-9]")) {
+                10^as.numeric(e)
+        } else {
+                1e3
+        }
+}
+
+dmgexp_table <- data_frame(exp = unique_dmgexp, 
+                           value = sapply(unique_dmgexp, convert_dmgexp))
+
+DMGEXP <- function(x) {
+        subs <- 
+                data_frame(exp = x) %>%
+                inner_join(dmgexp_table)
+        subs$value
+        
+}
+```
+The code works by taking a slow point function that does the conversion, tablizing the values then using an inner join to do the substitution.
+
+Then the total property damage `TOTPROPDMG` can be computed as follows:
+```{r}
+d$TOTPROPDMG <- d$PROPDMG * DMGEXP(d$PROPDMGEXP) +
+                d$CROPDMG * DMGEXP(d$CROPDMGEXP)
+```
+
+## Results
+
+We analyze the effect of each storm by summing the casualty and total property damage for each event type.
+
+```{r}
+casualties <- d %>% group_by(EVTYPE) %>% summarize(total = sum(CASUALTIES))
+```
