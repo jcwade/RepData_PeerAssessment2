@@ -1,13 +1,13 @@
 ---
-title: "Sources of storm-relatated casualties and property damage"
-author: "jcwade"
+title: "Tornadoes and floods: top sources of storm-related casualties and property damage"
+author: "John Wade"
 date: "April 25, 2015"
 output: html_document
 ---
 
 ## Synopsis
         
-Using storm data collected by U.S. National Oceanic and Atmospheric Administration's (NOAA), we analyze storm types such as hail, thunderstorm wind, and tornados in terms of their effect on casualties (fatalities and injuries) and property damage in U.S. dolars.  
+Using storm data collected by the U.S. National Oceanic and Atmospheric Administration (NOAA), we analyze storm types in terms of their historical effect on casualties (fatalities and injuries) and total property damage (property and crop damage) in U.S. dollars.  Over the time periods measured, we find that tornadoes are by far the largest source casualties and that floods are the largest source of property damage.  While the casualty data were clean and easy to interpret, the property damage data were inconsistently labeled and we had to make several assumptions, which we discuss below.
 
 ## Data Processing
 
@@ -15,36 +15,41 @@ We first import the following R libraries:
 ```{r, message=FALSE, warnings=FALSE}
 library(dplyr)
 library(stringr)
+library(ggplot2)
 ```
 
 The Storm Data was downloaded to a file and then loaded with the following code:
 ```{r, cache=TRUE}
 storm_data_file <- "StormData.csv.bz2"
-#FIXME: d <- tbl_df(read.csv(bzfile(storm_data_file), stringsAsFactors = FALSE))
+d <- tbl_df(read.csv(bzfile(storm_data_file), stringsAsFactors = FALSE))
 ```
-There are `r nrows(d)` and `r ncols(d)`.
+There are `r nrow(d)` entries and `r ncol(d)` data types.
 
-For our analysis, we will use the `EVTYPE` column to indicate the event type.  We will not try to aggregate types together, such as grouping "THUNDERSTORM WIND" with "HIGH WIND", since we do not have sufficient domain expertise.
+For our analysis, we used the `EVTYPE` column to indicate the event type.  We did not try to aggregate types together, such as grouping "THUNDERSTORM WIND" with "HIGH WIND", since we do not have sufficient domain expertise.
 
 To measure casualties, we sum `FATALITIES` and `INJURIES`:
 ```{r}
 d$CASUALTIES <- d$FATALITIES + d$INJURIES
 ```
 
-For total property damage, we sum `PROPDMG` and `CROPDMG`.  However, in the data, these values are not raw dollar amounts but a coefficient and a unit.  For example, the first row has the following values:
+For total property damage, we sum `PROPDMG` and `CROPDMG`.  However, in the data, these values are not given as raw dollar amounts but represented as a coefficient and a unit.  For example, the first row has the following values:
 ```{r}
 d[1, ] %>% select(contains("DMG"))
 ```
-Exponent values such as "K", "M", and "B" are given in the source as thousands, millions, and billions, respectively.  However, there are also other values in the data, including empty values.  We observe the following unique values:
+Here, the `CROPDMGEXP` value is not given.
+
+Exponent values such as "K", "M", and "B" are given in the source as thousands, millions, and billions, respectively.  However, there are also other values in the data, including empty values, as previously noted.  We observe the following unique values:
 ```{r}
 unique_dmgexp <- c(d$PROPDMGEXP, d$CROPDMGEXP) %>% unique %>% sort
+unique_dmgexp
 ```
 We use the following scheme to convert the other values:
+
 * "k", "m", "b": same as uppercase equivalents;
 * digits: associated power of ten;
 * others: units of thousands.
 
-The following R code performs this conversion:
+The following R code performs this conversion for a single value:
 ```{r}
 convert_dmgexp <- function(e) {
         KMB <- c(K = 1e3, M = 1e6, B = 1e9)
@@ -57,19 +62,22 @@ convert_dmgexp <- function(e) {
                 1e3
         }
 }
-
+```
+We then make a conversion table:
+```{r}
 dmgexp_table <- data_frame(exp = unique_dmgexp, 
                            value = sapply(unique_dmgexp, convert_dmgexp))
+```
 
+Finally, we write a vectorized conversion function that uses the conversion table and an inner join to perform the substitution:
+```{r}
 DMGEXP <- function(x) {
         subs <- 
                 data_frame(exp = x) %>%
                 inner_join(dmgexp_table)
         subs$value
-        
 }
 ```
-The code works by taking a slow point function that does the conversion, tablizing the values then using an inner join to do the substitution.
 
 Then the total property damage `TOTPROPDMG` can be computed as follows:
 ```{r}
@@ -79,8 +87,39 @@ d$TOTPROPDMG <- d$PROPDMG * DMGEXP(d$PROPDMGEXP) +
 
 ## Results
 
-We analyze the effect of each storm by summing the casualty and total property damage for each event type.
+We analyze the effect of each storm type by summing the total casualties and property damages and plotting the top ten storm types.
 
+For casualties, we can see the `TORNADO` storm type, historically, significantly exceeds all other types:
 ```{r}
-casualties <- d %>% group_by(EVTYPE) %>% summarize(total = sum(CASUALTIES))
+casualties <- d %>% 
+                group_by(EVTYPE) %>% 
+                summarize(total = sum(CASUALTIES)) %>%
+                arrange(desc(total)) %>%
+                head(n = 10)
+
+ggplot(casualties, aes(x = factor(EVTYPE), y = total)) + 
+        ggtitle("Casualties by Storm Type (Top 10)") +
+        xlab("Storm Type") +
+        ylab("Casualties") +
+        geom_bar(stat = "identity") + 
+        scale_x_discrete(limits = casualties$EVTYPE) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+Indeed, the `TORNADO` type exceeds the next storm type by a factor of `r round(casualties$total[1] / casualties$total[2], digits = 1)`.
+
+For property damage, the `FLOOD` type is the most costly:
+```{r}
+prop_damage <- d %>% 
+                group_by(EVTYPE) %>% 
+                summarize(total = sum(TOTPROPDMG)) %>%
+                arrange(desc(total)) %>%
+                head(n = 10)
+
+ggplot(prop_damage, aes(x = factor(EVTYPE), y = total / 1e9)) + 
+        ggtitle("Property Damage by Storm Type (Top 10)") +
+        xlab("Storm Type") +
+        ylab("Billion USD") +
+        geom_bar(stat = "identity") + 
+        scale_x_discrete(limits = prop_damage$EVTYPE) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
